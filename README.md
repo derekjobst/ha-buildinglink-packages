@@ -51,6 +51,23 @@ add-on if you're on HAOS), then restart Home Assistant.
 Then: **Settings → Devices & Services → Add Integration → BuildingLink**,
 and enter your BuildingLink credentials.
 
+## Debug logging
+
+The integration logs each step of the login and token-refresh flow (page
+fetches, form/field detection, credential submission, OIDC callbacks, and
+access token renewal) at debug level, without logging your password or
+tokens. To see it, add this to `configuration.yaml` and restart HA:
+
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.buildinglink: debug
+```
+
+Then check **Settings → System → Logs** (or your `home-assistant.log`) while
+the integration sets up or polls, to see exactly where it is in the flow.
+
 ## Testing the scraper before installing
 
 Because the login flow is essentially screen-scraping (there's no public

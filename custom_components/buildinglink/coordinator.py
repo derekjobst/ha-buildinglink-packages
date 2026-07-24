@@ -44,13 +44,19 @@ class BuildingLinkCoordinator(DataUpdateCoordinator[BuildingLinkDeliveriesData])
         self.client = client
 
     async def _async_update_data(self) -> BuildingLinkDeliveriesData:
+        _LOGGER.debug("Coordinator: starting update cycle")
         try:
             result = await self.client.async_get_deliveries()
         except BuildingLinkAuthError as err:
+            _LOGGER.debug("Coordinator: auth failed during update: %s", err)
             raise ConfigEntryAuthFailed(str(err)) from err
         except BuildingLinkError as err:
+            _LOGGER.debug("Coordinator: update failed: %s", err)
             raise UpdateFailed(str(err)) from err
 
+        _LOGGER.debug(
+            "Coordinator: update cycle complete, %d package(s)", result["count"]
+        )
         return BuildingLinkDeliveriesData(
             count=result["count"], packages=result["packages"]
         )
