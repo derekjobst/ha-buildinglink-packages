@@ -71,10 +71,20 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 _HEADERS = {
+    # BuildingLink fronts everything with Cloudflare Bot Management (the
+    # __cf_bm cookie shows up on every response). A custom, self-identifying
+    # User-Agent with none of the other headers a real browser sends is an
+    # easy bot signal, so this mirrors a real Chrome navigation instead.
     "User-Agent": (
-        "Mozilla/5.0 (compatible; HomeAssistantBuildingLink/0.1; "
-        "+https://github.com/derekjobst/ha-buildinglink-packages)"
-    )
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
+        "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 _AUTH_REDIRECT_RE = re.compile(r"https://auth[^\s'\"<>]+")
@@ -132,6 +142,12 @@ class BuildingLinkClient:
 
         match = _AUTH_REDIRECT_RE.search(login_html)
         if not match:
+            if self._looks_like_cloudflare_challenge(login_html):
+                raise BuildingLinkError(
+                    "BuildingLink returned a Cloudflare challenge page instead "
+                    "of the login page - this is usually transient, but if it "
+                    "persists BuildingLink may be blocking this traffic"
+                )
             raise BuildingLinkError(
                 "Could not find BuildingLink auth redirect URL - the login "
                 "page layout may have changed"
@@ -299,6 +315,20 @@ class BuildingLinkClient:
     def _contains_login_failure(html: str) -> bool:
         lowered = html.lower()
         return any(marker in lowered for marker in _LOGIN_FAILURE_MARKERS)
+
+    @staticmethod
+    def _looks_like_cloudflare_challenge(html: str) -> bool:
+        lowered = html.lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "checking your browser",
+                "just a moment",
+                "cf-please-wait",
+                "cf_chl_opt",
+                "attention required",
+            )
+        )
 
     @staticmethod
     def _parse_hidden_inputs(html: str) -> dict[str, str]:
