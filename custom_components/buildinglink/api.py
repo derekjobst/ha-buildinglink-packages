@@ -135,60 +135,88 @@ class BuildingLinkClient:
 
     async def async_login(self) -> None:
         """Run the full BuildingLink login flow, establishing a session."""
+        _LOGGER.debug("Login: starting for user %s", self._mask_username())
         self._logged_in = False
         self._access_token = None
 
+        _LOGGER.debug("Login: step 1/5 - fetching login page %s", LOGIN_URL)
         login_html, _ = await self._get(LOGIN_URL)
 
         match = _AUTH_REDIRECT_RE.search(login_html)
         if not match:
             if self._looks_like_cloudflare_challenge(login_html):
+                _LOGGER.debug("Login: login page looks like a Cloudflare challenge")
                 raise BuildingLinkError(
                     "BuildingLink returned a Cloudflare challenge page instead "
                     "of the login page - this is usually transient, but if it "
                     "persists BuildingLink may be blocking this traffic"
                 )
+            _LOGGER.debug("Login: no auth redirect URL found in login page")
             raise BuildingLinkError(
                 "Could not find BuildingLink auth redirect URL - the login "
                 "page layout may have changed"
             )
         auth_url = match.group(0).replace("&amp;", "&")
+        _LOGGER.debug("Login: found auth redirect URL")
 
+        _LOGGER.debug("Login: step 2/5 - fetching auth form")
         auth_html, auth_page_url = await self._get(auth_url)
         form_action, hidden_fields = self._parse_form(auth_html, auth_page_url)
         username_field, password_field = self._detect_login_fields(auth_html)
 
         if not username_field or not password_field:
+            _LOGGER.debug(
+                "Login: could not detect username/password fields (username_field=%s, password_field=%s)",
+                bool(username_field),
+                bool(password_field),
+            )
             raise BuildingLinkError(
                 "Could not detect BuildingLink's username/password form fields"
             )
+        _LOGGER.debug(
+            "Login: detected form fields (%d hidden field(s)) and submitting credentials",
+            len(hidden_fields),
+        )
 
         payload = dict(hidden_fields)
         payload[username_field] = self._username
         payload[password_field] = self._password
 
+        _LOGGER.debug("Login: step 3/5 - submitting credentials to auth form")
         callback_html, _ = await self._post(form_action, payload)
         oidc_fields = self._parse_hidden_inputs(callback_html)
 
         if not oidc_fields:
             if self._contains_login_failure(callback_html):
+                _LOGGER.debug("Login: BuildingLink rejected the credentials")
                 raise BuildingLinkAuthError(
                     "BuildingLink rejected the username or password"
                 )
+            _LOGGER.debug(
+                "Login: no OIDC callback fields found after submitting credentials"
+            )
             raise BuildingLinkError(
                 "Unexpected response after submitting BuildingLink credentials"
             )
 
         id_token = oidc_fields.get("id_token")
+        _LOGGER.debug(
+            "Login: step 4/5 - credentials accepted, received %d OIDC callback field(s) (id_token=%s)",
+            len(oidc_fields),
+            bool(id_token),
+        )
 
+        _LOGGER.debug("Login: step 5/5 - posting OIDC callback to %s", OIDC_CALLBACK_URL)
         final_html, final_url = await self._post(OIDC_CALLBACK_URL, oidc_fields)
 
         if self._looks_like_login_page(final_url) or self._contains_login_failure(
             final_html
         ):
+            _LOGGER.debug("Login: landed back on login page after OIDC callback")
             raise BuildingLinkAuthError("BuildingLink login did not complete")
 
         if not id_token:
+            _LOGGER.debug("Login: OIDC callback succeeded but no id_token was present")
             raise BuildingLinkError(
                 "BuildingLink login succeeded but did not return an id_token "
                 "needed to fetch an API access token"
@@ -196,14 +224,22 @@ class BuildingLinkClient:
 
         self._id_token = id_token
         self._logged_in = True
+        _LOGGER.debug(
+            "Login: session established for user %s, fetching API access token",
+            self._mask_username(),
+        )
 
         # Fail fast here (rather than on the first coordinator poll) so
         # config flow validation catches a broken token exchange too.
         await self._async_refresh_access_token()
+        _LOGGER.debug("Login: complete")
 
     async def _async_fetch_deliveries(self, allow_relogin: bool) -> dict:
         if not self._access_token_valid():
+            _LOGGER.debug("Deliveries: access token missing or expired, refreshing")
             await self._async_refresh_access_token()
+        else:
+            _LOGGER.debug("Deliveries: reusing cached access token")
 
         headers = {
             **_HEADERS,
@@ -211,28 +247,35 @@ class BuildingLinkClient:
             "x-api-key": EVENTLOG_API_KEY,
             "Accept": EVENTLOG_ACCEPT_HEADER,
         }
+        _LOGGER.debug("Deliveries: fetching %s", EVENTLOG_DELIVERIES_URL)
         try:
             async with self._session.get(
                 EVENTLOG_DELIVERIES_URL, headers=headers
             ) as resp:
                 if resp.status == 401 and allow_relogin:
                     _LOGGER.debug(
-                        "Eventlog API rejected the access token, re-authenticating"
+                        "Deliveries: eventlog API rejected the access token (401), "
+                        "re-authenticating from scratch"
                     )
                     await self.async_login()
                     return await self._async_fetch_deliveries(allow_relogin=False)
                 resp.raise_for_status()
                 data = await resp.json(content_type=None)
         except aiohttp.ClientError as err:
+            _LOGGER.debug("Deliveries: request to eventlog API failed: %s", err)
             raise BuildingLinkError(
                 f"Error fetching {EVENTLOG_DELIVERIES_URL}: {err}"
             ) from err
 
-        return self._parse_deliveries(data)
+        result = self._parse_deliveries(data)
+        _LOGGER.debug("Deliveries: fetched %d package(s)", result["count"])
+        return result
 
     async def _async_refresh_access_token(self) -> None:
         """Silently obtain an eventlog API access token via the SPA's OIDC client."""
+        _LOGGER.debug("Token refresh: starting silent OIDC renewal")
         if not self._id_token:
+            _LOGGER.debug("Token refresh: no id_token available, cannot proceed")
             raise BuildingLinkError(
                 "Cannot refresh BuildingLink API access token without an id_token"
             )
@@ -249,17 +292,23 @@ class BuildingLinkClient:
         }
         url = f"{AUTHORIZE_URL}?{urlencode(params)}"
 
+        _LOGGER.debug("Token refresh: requesting silent authorize redirect")
         try:
             async with self._session.get(
                 url, headers=_HEADERS, allow_redirects=False
             ) as resp:
                 location = resp.headers.get("Location")
         except aiohttp.ClientError as err:
+            _LOGGER.debug("Token refresh: request failed: %s", err)
             raise BuildingLinkError(
                 f"Error requesting BuildingLink API access token: {err}"
             ) from err
 
         if not location or "#" not in location:
+            _LOGGER.debug(
+                "Token refresh: redirect had no token fragment (location present=%s)",
+                bool(location),
+            )
             raise BuildingLinkAuthError(
                 "BuildingLink silent token renewal did not redirect with a "
                 "token fragment - the session may have expired"
@@ -270,6 +319,10 @@ class BuildingLinkClient:
         access_token = token_data.get("access_token")
 
         if not access_token:
+            _LOGGER.debug(
+                "Token refresh: no access_token in redirect fragment (fields=%s)",
+                sorted(token_data.keys()),
+            )
             raise BuildingLinkAuthError(
                 "BuildingLink silent token renewal did not return an access_token"
             )
@@ -283,6 +336,11 @@ class BuildingLinkClient:
         self._access_token_expiry = time.monotonic() + max(
             expires_in - ACCESS_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS, 0
         )
+        _LOGGER.debug(
+            "Token refresh: obtained access token, expires in %ds (refreshing again after %ds)",
+            expires_in,
+            max(expires_in - ACCESS_TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS, 0),
+        )
 
     def _access_token_valid(self) -> bool:
         return (
@@ -290,20 +348,31 @@ class BuildingLinkClient:
             and time.monotonic() < self._access_token_expiry
         )
 
+    def _mask_username(self) -> str:
+        if not self._username:
+            return "<empty>"
+        if len(self._username) <= 2:
+            return "*" * len(self._username)
+        return f"{self._username[0]}{'*' * (len(self._username) - 2)}{self._username[-1]}"
+
     async def _get(self, url: str) -> tuple[str, str]:
         try:
             async with self._session.get(url, headers=_HEADERS) as resp:
+                _LOGGER.debug("GET %s -> %s", url, resp.status)
                 resp.raise_for_status()
                 return await resp.text(), str(resp.url)
         except aiohttp.ClientError as err:
+            _LOGGER.debug("GET %s failed: %s", url, err)
             raise BuildingLinkError(f"Error fetching {url}: {err}") from err
 
     async def _post(self, url: str, data: dict) -> tuple[str, str]:
         try:
             async with self._session.post(url, data=data, headers=_HEADERS) as resp:
+                _LOGGER.debug("POST %s -> %s", url, resp.status)
                 resp.raise_for_status()
                 return await resp.text(), str(resp.url)
         except aiohttp.ClientError as err:
+            _LOGGER.debug("POST %s failed: %s", url, err)
             raise BuildingLinkError(f"Error posting to {url}: {err}") from err
 
     @staticmethod

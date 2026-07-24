@@ -41,11 +41,19 @@ _USER_SCHEMA = vol.Schema(
 )
 
 
+def _mask_username(username: str) -> str:
+    if len(username) <= 2:
+        return "*" * len(username)
+    return f"{username[0]}{'*' * (len(username) - 2)}{username[-1]}"
+
+
 async def _validate_credentials(hass, username: str, password: str) -> None:
     """Raise BuildingLinkAuthError/BuildingLinkError if login fails."""
+    _LOGGER.debug("Config flow: validating credentials for %s", _mask_username(username))
     session = async_get_clientsession(hass)
     client = BuildingLinkClient(session, username, password)
     await client.async_test_credentials()
+    _LOGGER.debug("Config flow: credentials validated successfully")
 
 
 class BuildingLinkConfigFlow(ConfigFlow, domain=DOMAIN):
