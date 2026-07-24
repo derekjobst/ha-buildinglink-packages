@@ -1,0 +1,47 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to BuildingLink",
+        "description": "Enter the credentials you use to sign in to your BuildingLink tenant portal.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate BuildingLink",
+        "description": "BuildingLink rejected the stored session for {username}. Enter your current password.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid username or password",
+      "cannot_connect": "Could not connect to BuildingLink, or its page layout has changed",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This BuildingLink account is already configured",
+      "reauth_successful": "Reauthentication was successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BuildingLink options",
+        "data": {
+          "scan_interval": "Polling interval (minutes)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "packages": {
+        "name": "Packages"
+      }
+    }
+  }
+}
