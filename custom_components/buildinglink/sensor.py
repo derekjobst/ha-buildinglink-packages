@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.const import CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
@@ -31,6 +31,7 @@ class BuildingLinkPackagesSensor(CoordinatorEntity[BuildingLinkCoordinator], Sen
     _attr_translation_key = "packages"
     _attr_icon = "mdi:package-variant"
     _attr_native_unit_of_measurement = "packages"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_attribution = ATTRIBUTION
 
     def __init__(
